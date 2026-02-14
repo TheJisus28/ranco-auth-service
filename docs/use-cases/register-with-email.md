@@ -58,13 +58,13 @@ sequenceDiagram
 
     H->>S: RegisterWithEmail(ctx, email)
 
-    S->>AR: GetByEmail(email)
-    AR-->>S: Account | nil
+    S->>AMR: GetByProvider(provider=email, providerID=email)
+    AMR-->>S: AuthMethod | nil
 
-    alt Account exists
+    alt Auth method exists (email already registered)
         S-->>H: ErrAccountAlreadyExists
         H-->>C: 409 Conflict
-    else Account does not exist
+    else Auth method does not exist (email available)
         Note over S, VR: Start Database Transaction
         S->>AR: Create(account status=pending)
         AR-->>S: Account
@@ -131,9 +131,9 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email string) error
 
 #### Step 1 — Verify Existence
 
-* Invoke `accountRepo.GetByEmail(ctx, email)`.
-* If account exists: Return error.
-* If account does not exist: Proceed.
+* Invoke `authMethodRepo.GetByProvider(ctx, "email", email)`.
+* If auth method exists: Return `ErrAccountAlreadyExists`.
+* If auth method does not exist: Proceed.
 
 #### Step 2 — Create Account
 
@@ -142,7 +142,6 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email string) error
 
 #### Step 3 — Create Auth Method
 
-* Link the account ID with the "email" type.
 * Link the account ID with the "email" provider code and the email address as `provider_id`.
 * Invoke `authMethodRepo.Create(ctx, account.ID, "email", email)`.
 
