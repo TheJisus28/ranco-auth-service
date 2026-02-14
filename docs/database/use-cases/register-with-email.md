@@ -17,7 +17,6 @@
 ### accounts
 
 * `id` (UUID)
-* `email` (String)
 * `status` (`pending`, `active`)
 * `created_at` (Timestamp)
 
@@ -25,16 +24,18 @@
 
 * `id` (UUID)
 * `account_id` (UUID)
-* `type` (`email`)
-* `created_at` (Timestamp)
+* `provider_code` (e.g. `email`)
+* `provider_id` (String — provider identifier, e.g. the email address)
+* `is_verified` (Boolean)
+* `last_login_at` (Timestamp, nullable)
 
 ### verification_codes
 
 * `id` (UUID)
-* `account_id` (UUID)
+* `auth_method_id` (UUID)
 * `code_hash` (String)
 * `expires_at` (Timestamp)
-* `used_at` (Timestamp, nullable)
+* `consumed_at` (Timestamp, nullable)
 * `created_at` (Timestamp)
 
 ---
@@ -66,10 +67,10 @@ sequenceDiagram
         S->>AR: Create(account status=pending)
         AR-->>S: Account
 
-        S->>AMR: Create(accountID, type=email)
-        AMR-->>S: OK
+        S->>AMR: Create(accountID, provider=email, providerID=email)
+        AMR-->>S: AuthMethod
 
-        S->>VR: Create(accountID, code_hash, expires_at)
+        S->>VR: Create(authMethodID, code_hash, expires_at)
         VR-->>S: VerificationCode
         Note over S, VR: Commit Transaction
 
@@ -134,7 +135,6 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email string) error
 
 #### Step 2 — Create Account
 
-* Set `email`.
 * Set `status = pending`.
 * Invoke `accountRepo.Create(ctx, account)`.
 
@@ -148,7 +148,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email string) error
 * Generate a plaintext OTP code.
 * Generate a secure Hash of the code.
 * Define expiration timestamp.
-* Invoke `verificationRepo.Create(ctx, verificationCode)`.
+* Invoke `verificationRepo.Create(ctx, authMethodID, codeHash, expiresAt)` (the code is linked to the auth method created in the previous step).
 
 #### Step 5 — Publish Event
 
