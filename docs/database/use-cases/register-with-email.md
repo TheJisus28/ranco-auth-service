@@ -34,6 +34,7 @@
 * `id` (UUID)
 * `auth_method_id` (UUID)
 * `code_hash` (String)
+* `attempts` (Integer)
 * `expires_at` (Timestamp)
 * `consumed_at` (Timestamp, nullable)
 * `created_at` (Timestamp)
