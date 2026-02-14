@@ -143,7 +143,8 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email string) error
 #### Step 3 — Create Auth Method
 
 * Link the account ID with the "email" type.
-* Invoke `authMethodRepo.Create(ctx, account.ID, "email")`.
+* Link the account ID with the "email" provider code and the email address as `provider_id`.
+* Invoke `authMethodRepo.Create(ctx, account.ID, "email", email)`.
 
 #### Step 4 — Create Verification Code
 
