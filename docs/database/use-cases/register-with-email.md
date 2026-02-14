@@ -18,6 +18,7 @@
 
 * `id` (UUID)
 * `status` (`pending`, `active`)
+* `role_code` (String — role identifier, e.g. `user`, `admin`)
 * `created_at` (Timestamp)
 
 ### auth_methods
