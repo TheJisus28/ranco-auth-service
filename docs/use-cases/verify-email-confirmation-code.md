@@ -2,7 +2,7 @@
 
 ---
 
-## Actors
+# Actors
 
 * **Client**: Mobile or Web application
 * **AuthHandler (API Layer)**: Handles HTTP transport and request/response parsing
@@ -15,9 +15,9 @@
 
 ---
 
-## Data Models
+# Data Models
 
-### accounts
+## accounts
 
 * `id` (UUID)
 * `status_code` (PENDING, ACTIVE, BANNED, DELETED)
@@ -26,7 +26,7 @@
 
 ---
 
-### auth_methods
+## auth_methods
 
 * `id` (UUID)
 * `account_id` (UUID)
@@ -37,85 +37,29 @@
 
 ---
 
-### verification_codes
+## verification_codes
 
 * `id` (UUID)
 * `auth_method_id` (UUID)
 * `code_hash` (String)
-* `attempts` (Integer)
+* `attempts` (Integer — incremented on invalid submission)
 * `expires_at` (Timestamp)
 * `consumed_at` (Timestamp, nullable)
 * `created_at` (Timestamp)
 
 ---
 
-### refresh_tokens
+## refresh_tokens
 
 * `id` (UUID)
 * `account_id` (UUID)
 * `token_hash` (String)
-* `revoked_at` (Timestamp, nullable)
 * `expires_at` (Timestamp)
 * `created_at` (Timestamp)
 
 ---
 
-## Request DTO
-
-```json
-{
-  "email": "user@email.com",
-  "code": "123456"
-}
-```
-
----
-
-## Response DTO (Success)
-
-```json
-{
-  "accessToken": "jwt-access-token",
-  "refreshToken": "jwt-refresh-token",
-  "account": {
-    "id": "uuid",
-    "role": "USER",
-    "status": "ACTIVE"
-  }
-}
-```
-
-HTTP Status: `200 OK`
-
----
-
-## Error Responses
-
-### Invalid or Expired Code
-
-```json
-{
-  "error": "invalid_or_expired_code"
-}
-```
-
-HTTP Status: `400 Bad Request`
-
----
-
-### Invalid Account State
-
-```json
-{
-  "error": "invalid_account_state"
-}
-```
-
-HTTP Status: `409 Conflict`
-
----
-
-# Updated Sequence Diagram
+# Sequence Diagram
 
 ```mermaid
 sequenceDiagram
@@ -132,219 +76,71 @@ participant TokenService
 Client->>AuthHandler: POST /auth/verify-email
 AuthHandler->>AuthService: VerifyEmail(ctx, email, code)
 
-AuthService->>AuthMethodRepo: GetByProvider(EMAIL, email)
-alt Auth method not found
-    AuthService-->>AuthHandler: ErrInvalidOrExpiredCode
-    AuthHandler-->>Client: 400 Bad Request
-else Auth method exists
+AuthService->>AuthMethodRepo: FindByProvider(provider_code, provider_id)
+AuthMethodRepo-->>AuthService: AuthMethod
 
-    AuthService->>AccountRepo: GetByID(accountID)
-    alt Account status != PENDING
-        AuthService-->>AuthHandler: ErrInvalidAccountState
-        AuthHandler-->>Client: 409 Conflict
-    else Account is PENDING
+AuthService->>AccountRepo: FindByID(account_id)
+AccountRepo-->>AuthService: Account
 
-        AuthService->>VerificationRepo: GetActiveByAuthMethod(authMethodID)
-        alt Code not found or expired
-            AuthService-->>AuthHandler: ErrInvalidOrExpiredCode
-            AuthHandler-->>Client: 400 Bad Request
-        else Code exists
+AuthService->>AuthService: ValidateAccountStatus(account.status_code)
 
-            alt Hash mismatch
-                AuthService->>VerificationRepo: IncrementAttempts(codeID)
-                AuthService-->>AuthHandler: ErrInvalidOrExpiredCode
-                AuthHandler-->>Client: 400 Bad Request
-            else Hash valid
+AuthService->>VerificationRepo: FindLatestByAuthMethod(auth_method_id)
+VerificationRepo-->>AuthService: VerificationCode
 
-                Note over AuthService: Begin Database Transaction
 
-                AuthService->>VerificationRepo: Consume(codeID)
-                AuthService->>AuthMethodRepo: MarkVerified(authMethodID)
-                AuthService->>AccountRepo: UpdateStatus(accountID, ACTIVE)
-                AuthService->>RefreshTokenRepo: RevokeAll(accountID)
+AuthService->>AuthService: ValidateCodeExpiration(code.expires_at)
+AuthService->>AuthService: ValidateCodeNotConsumed(code.consumed_at)
+AuthService->>AuthService: CompareCodeHash(input_code, code.code_hash)
 
-                AuthService->>TokenService: GenerateRefreshToken(account_id)
-                TokenService-->>AuthService: refreshToken (JWT)
+Note over AuthService: Begin Database Transaction
 
-                AuthService->>RefreshTokenRepo: StoreHash(account_id, refreshToken_hash)
+AuthService->>VerificationRepo: UpdateConsumedAt(code_id, now)
+VerificationRepo-->>AuthService: OK
 
-                Note over AuthService: Commit Transaction
+AuthService->>AuthMethodRepo: UpdateVerified(auth_method_id, true)
+AuthMethodRepo-->>AuthService: OK
 
-                AuthService->>TokenService: GenerateAccessToken(account_id, role, status)
-                TokenService-->>AuthService: accessToken (JWT)
+AuthService->>AccountRepo: UpdateStatus(account_id, ACTIVE)
+AccountRepo-->>AuthService: OK
 
-                AuthService-->>AuthHandler: VerifyEmailResult
-                AuthHandler-->>Client: 200 OK
-            end
-        end
-    end
-end
-```
+AuthService->>TokenService: GenerateRefreshToken(account_id)
+TokenService-->>AuthService: refreshToken
+
+AuthService->>RefreshTokenRepo: Insert(account_id, token_hash, expires_at)
+RefreshTokenRepo-->>AuthService: OK
+
+AuthService->>TokenService: GenerateAccessToken(account_id, role, status)
+TokenService-->>AuthService: accessToken
+
+Note over AuthService: Commit Transaction
+
+AuthService-->>AuthHandler: VerifyEmailResult(accessToken, refreshToken, account)
+AuthHandler-->>Client: 200 OK
+
+````
 
 ---
 
-# Logical Flow Overview
+# Error Handling
 
-```mermaid
-flowchart TD
-
-A[Validate email + code] --> B[Validate account state]
-B --> C[Validate verification code hash]
-
-C --> D[Begin Transaction]
-
-D --> E[Consume verification code]
-E --> F[Mark auth method verified]
-F --> G[Update account to ACTIVE]
-G --> H[Revoke existing refresh tokens]
-H --> I[Generate Refresh JWT]
-I --> J[Store refresh token hash]
-
-J --> K[Commit Transaction]
-
-K --> L[Generate Access JWT with domain claims]
-L --> M[Return accessToken + refreshToken + account]
-```
+| Error Code                       | Trigger Condition                       | State Consequence      | HTTP Status | Response                                        |
+| -------------------------------- | --------------------------------------- | ---------------------- | ----------- | ----------------------------------------------- |
+| `invalid_or_expired_code`        | Auth method not found                   | No state mutation      | 400         | `{ "error": "invalid_or_expired_code" }`        |
+| `invalid_account_state`          | Account status ≠ `PENDING`              | No state mutation      | 409         | `{ "error": "invalid_account_state" }`          |
+| `invalid_or_expired_code`        | Verification code not found             | No state mutation      | 400         | `{ "error": "invalid_or_expired_code" }`        |
+| `invalid_or_expired_code`        | Code expired                            | No state mutation      | 400         | `{ "error": "invalid_or_expired_code" }`        |
+| `invalid_or_expired_code`        | Code already consumed                   | No state mutation      | 400         | `{ "error": "invalid_or_expired_code" }`        |
+| `invalid_or_expired_code`        | Hash mismatch                           | `attempts` incremented | 400         | `{ "error": "invalid_or_expired_code" }`        |
+| `verification_attempts_exceeded` | Attempts exceed maximum after increment | Code marked unusable   | 400         | `{ "error": "verification_attempts_exceeded" }` |
+| `internal_error`                 | Any failure inside transaction          | Full rollback          | 500         | `{ "error": "internal_error" }`                 |
 
 ---
 
-# Detailed Flow
+# Transactional Guarantees
 
----
-
-## 1. Client → API
-
-Endpoint:
-
-```
-POST /auth/verify-email
-```
-
-Payload:
-
-```json
-{
-  "email": "user@email.com",
-  "code": "123456"
-}
-```
-
----
-
-## 2. API Layer
-
-### Responsibilities
-
-* Parse request body
-* Validate input format
-* Call application service
-* Map domain errors to HTTP responses
-* Return JSON response
-
----
-
-## 3. Application Layer
-
-### Method
-
-```
-VerifyEmail(ctx, email, code)
-```
-
----
-
-## Step 1 — Retrieve Auth Method
-
-* `GetByProvider(EMAIL, email)`
-
-Validation rules:
-
-* Must exist
-* Must belong to EMAIL provider
-
-If not found → `ErrInvalidOrExpiredCode`
-
----
-
-## Step 2 — Retrieve Account
-
-* `GetByID(accountID)`
-
-Validation rules:
-
-* `status_code` must be `PENDING`
-* If `ACTIVE` → invalid state
-* If `BANNED` or `DELETED` → authentication not allowed
-
-If invalid → `ErrInvalidAccountState`
-
----
-
-## Step 3 — Retrieve Active Verification Code
-
-* `GetActiveByAuthMethod(authMethodID)`
-
-Validation rules:
-
-* Must exist
-* `expires_at` must be greater than current time
-* `consumed_at` must be null
-
-If hash comparison fails:
-
-* `IncrementAttempts(codeID)`
-* Return `ErrInvalidOrExpiredCode`
-
----
-
-## Step 4 — Transaction
-
-The following operations must occur atomically:
-
-* Consume verification code
-* Mark auth method as verified
-* Update account status to `ACTIVE`
-* Revoke all existing refresh tokens
-* Generate new refresh token (JWT)
-* Persist refresh token hash
-
-If any step fails → rollback
-
----
-
-## Step 5 — Access Token Generation (After Commit)
-
-After successful transaction commit:
-
-1. Generate **Access Token (JWT)** containing:
-
-   * `account_id`
-   * `role`
-   * `status`
-
-2. Return response with:
-
-   * `accessToken`
-   * `refreshToken`
-   * `account`
-
----
-
-# Final State
-
-* Account status updated to `ACTIVE`
-* Auth method marked as verified
-* Verification code consumed
-* Previous refresh tokens revoked
-* One new active refresh token stored
-* Access token issued
-* Refresh token issued
-
----
-
-# Transactional Considerations
-
-* All state mutations and refresh token generation must be atomic
-* No tokens are issued if the transaction fails
-* Only one active refresh token per account is allowed
+* All state mutations and token generation occur inside a single database transaction
+* All business validation is executed inside `AuthService`
+* Repositories only perform persistence operations
+* No token is returned if the transaction fails
+* Verification codes cannot be reused
 * Public error messages do not expose internal validation details
