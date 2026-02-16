@@ -67,7 +67,7 @@ AuthHandler->>AuthService: RegisterWithEmail(ctx, email)
 AuthService->>AuthMethodRepo: FindByProvider(provider_code, provider_id)
 AuthMethodRepo-->>AuthService: AuthMethod | nil
 
-AuthService->>AuthService: ValidateEmailAvailability(authMethod)
+AuthService->>AuthService: ValidateEmailAvailability()
 
 Note over AuthService: Begin Database Transaction
 
@@ -98,10 +98,11 @@ AuthHandler-->>Client: 201 Created
 
 When the registration process completes successfully:
 
-| Field                   | Type    | Description                                  |
-| ----------------------- | ------- | -------------------------------------------- |
-| `message`               | String  | Registration state indicator                 |
-| `verification_required` | Boolean | Indicates that email verification is pending |
+| Field                   | Type    | Description                              |
+| ----------------------- | ------- | ---------------------------------------- |
+| `message`               | String  | Registration state indicator             |
+| `verification_required` | Boolean | Indicates email verification is pending  |
+| `expires_in`            | Integer | Seconds before verification code expires |
 
 ---
 
@@ -110,7 +111,8 @@ When the registration process completes successfully:
 ```json
 {
   "message": "registration_pending",
-  "verification_required": true
+  "verification_required": true,
+  "expires_in": 300
 }
 ```
 
@@ -122,6 +124,36 @@ When the registration process completes successfully:
 | ------------------------ | ------------------------------------ | ----------------- | ----------- | --------------------------------------- |
 | `account_already_exists` | Auth method found for provided email | No state mutation | 409         | `{ "error": "account_already_exists" }` |
 | `internal_error`         | Any failure inside transaction       | Full rollback     | 500         | `{ "error": "internal_error" }`         |
+
+---
+
+# Published Events
+
+## UserRegisteredEvent
+
+Published after successful transaction commit.
+
+### Payload
+
+| Field        | Type    | Description                                 |
+| ------------ | ------- | ------------------------------------------- |
+| `account_id` | UUID    | Identifier of the newly created account     |
+| `email`      | String  | Email used during registration              |
+| `code`       | String  | Plaintext verification code                 |
+| `expires_in` | Integer | Seconds until the verification code expires |
+
+---
+
+### Payload Example
+
+```json
+{
+  "account_id": "uuid",
+  "email": "user@email.com",
+  "code": "123456",
+  "expires_in": 300
+}
+```
 
 ---
 
